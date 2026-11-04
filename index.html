@@ -44,10 +44,49 @@
     [hidden] { display: none !important; }
     footer { text-align: center; color: #93998e; font-size: 12px; margin-top: 23px; line-height: 1.8; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .account-bar { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; padding: 20px 28px 0; }
+    .account-email { max-width: min(60vw, 360px); overflow-wrap: anywhere; font-size: 13px; }
+    .account-button { border: 1px solid #d5dfd0; border-radius: 10px; background: #fffefa; color: #355d4b; padding: 10px 16px; }
+    .account-button:hover { background: #eaf2e8; }
+    button:disabled { opacity: .6; cursor: wait; }
+    dialog { width: min(420px, calc(100% - 32px)); padding: 28px; border: 1px solid #e3e6dc; border-radius: 20px; background: #fffefa; color: #273c31; box-shadow: 0 20px 80px #273c3126; }
+    dialog::backdrop { background: #1f352b80; }
+    .auth-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 12px; }
+    .auth-heading h2 { margin: 0; font-size: 24px; }
+    .close-dialog { border: 0; background: none; color: #6b806f; font-size: 24px; padding: 0 5px; }
+    #auth-form { display: flex; flex-direction: column; gap: 10px; }
+    #auth-form label { flex: none; display: block; margin-top: 8px; font-size: 14px; }
+    #auth-form input { width: 100%; border: 1px solid #dce2d7; border-radius: 10px; padding: 13px; color: inherit; font: inherit; background: white; }
+    #auth-submit { padding: 14px; margin-top: 12px; }
+    .auth-toggle { display: block; margin: 18px auto 0; border: 0; background: transparent; color: #355d4b; text-decoration: underline; text-underline-offset: 4px; font-size: 13px; }
+    .auth-message { font-size: 13px; line-height: 1.7; white-space: pre-line; }
+    .auth-message[data-error="true"] { color: #a33d30; }
+    #account-message { margin: 8px 28px 0; text-align: right; }
     @media (max-width: 480px) { main { margin: 48px auto; width: calc(100% - 28px); } .card { padding: 20px; } .add { padding: 0 17px; } }
   </style>
 </head>
 <body>
+  <header class="account-bar" aria-label="내 계정">
+    <span class="account-email" id="account-email" hidden></span>
+    <button class="account-button" id="login-button" type="button">로그인</button>
+    <button class="account-button" id="logout-button" type="button" hidden>로그아웃</button>
+  </header>
+  <p id="account-message" class="auth-message" role="status" hidden></p>
+  <dialog id="auth-dialog" aria-labelledby="auth-title">
+    <div class="auth-heading">
+      <h2 id="auth-title">로그인</h2>
+      <button class="close-dialog" id="auth-close" type="button" aria-label="팝업 닫기">×</button>
+    </div>
+    <form id="auth-form">
+      <label for="auth-email">이메일</label>
+      <input id="auth-email" type="email" autocomplete="email" placeholder="name@example.com" required autofocus>
+      <label for="auth-password">비밀번호</label>
+      <input id="auth-password" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요" required>
+      <p id="auth-message" class="auth-message" role="status" hidden></p>
+      <button id="auth-submit" class="add" type="submit">로그인</button>
+    </form>
+    <button id="auth-toggle" class="auth-toggle" type="button">계정이 없으신가요? 회원가입</button>
+  </dialog>
   <main>
     <div class="eyebrow">A LITTLE PROGRESS, EVERY DAY</div>
     <h1>오늘의 할 일<span style="color:#7d9b70">.</span></h1>
@@ -65,6 +104,140 @@
     </section>
     <footer id="save-note">이 브라우저에 자동으로 저장돼요.</footer>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    (() => {
+      'use strict';
+      const $ = selector => document.querySelector(selector);
+      const dialog = $('#auth-dialog');
+      const form = $('#auth-form');
+      const email = $('#auth-email');
+      const password = $('#auth-password');
+      const submit = $('#auth-submit');
+      const toggle = $('#auth-toggle');
+      let mode = 'login';
+      let clientPromise;
+      let busy = false;
+
+      function message(node, text = '', error = false) {
+        node.textContent = text;
+        node.hidden = !text;
+        node.dataset.error = String(error);
+      }
+      function updateAccount(session) {
+        const signedIn = Boolean(session?.user);
+        $('#account-email').textContent = session?.user?.email || '';
+        $('#account-email').hidden = !signedIn;
+        $('#login-button').hidden = signedIn;
+        $('#logout-button').hidden = !signedIn;
+      }
+      function errorText(error) {
+        const code = error?.code;
+        if (code === 'invalid_credentials') return '이메일 또는 비밀번호를 확인해주세요.';
+        if (code === 'email_not_confirmed') return '이메일의 가입 확인 링크를 먼저 눌러주세요.';
+        if (code === 'over_email_send_rate_limit' || error?.status === 429) return '요청 한도에 도달했어요. 잠시 후 다시 시도해주세요.';
+        if (code === 'user_already_exists') return '이미 가입된 이메일이에요. 로그인으로 전환해주세요.';
+        if (code === 'weak_password') return '비밀번호가 보안 조건에 맞지 않아요. 더 길고 다양한 문자로 입력해주세요.';
+        if (code === 'signup_disabled') return '현재 회원가입을 사용할 수 없어요.';
+        return error?.userMessage || '요청을 완료하지 못했어요. 네트워크 연결을 확인하고 다시 시도해주세요.';
+      }
+      async function getClient() {
+        if (!clientPromise) {
+          clientPromise = (async () => {
+            if (!window.supabase?.createClient) throw new Error('SDK unavailable');
+            if (!/^https?:$/.test(window.location.protocol)) {
+              throw { userMessage: '로그인은 배포된 웹앱 주소에서 이용해주세요.' };
+            }
+            const response = await fetch('/api/supabase-config', { cache: 'no-store' });
+            if (!response.ok) throw { userMessage: '로그인 연결 설정을 불러오지 못했어요. 잠시 후 다시 시도해주세요.' };
+            const config = await response.json();
+            const client = window.supabase.createClient(config.url, config.publishableKey);
+            client.auth.onAuthStateChange((_event, session) => {
+              updateAccount(session);
+              if (session && dialog.open) {
+                dialog.close();
+                password.value = '';
+                message($('#account-message'));
+              }
+            });
+            const { data, error } = await client.auth.getSession();
+            if (error) throw error;
+            updateAccount(data.session);
+            return client;
+          })().catch(error => { clientPromise = null; throw error; });
+        }
+        return clientPromise;
+      }
+      function setMode(nextMode) {
+        mode = nextMode;
+        const signup = mode === 'signup';
+        $('#auth-title').textContent = signup ? '회원가입' : '로그인';
+        submit.textContent = signup ? '회원가입' : '로그인';
+        toggle.textContent = signup ? '이미 계정이 있으신가요? 로그인' : '계정이 없으신가요? 회원가입';
+        password.autocomplete = signup ? 'new-password' : 'current-password';
+        password.minLength = signup ? 6 : 1;
+        password.value = '';
+        message($('#auth-message'));
+      }
+      function setBusy(value) {
+        busy = value;
+        [email, password, submit, toggle, $('#login-button')].forEach(node => { node.disabled = value; });
+        submit.textContent = value ? '처리 중…' : (mode === 'signup' ? '회원가입' : '로그인');
+        form.setAttribute('aria-busy', String(value));
+      }
+      $('#login-button').addEventListener('click', () => {
+        if (busy) return;
+        setMode('login');
+        message($('#account-message'));
+        dialog.showModal();
+      });
+      $('#auth-close').addEventListener('click', () => dialog.close());
+      dialog.addEventListener('close', () => { password.value = ''; });
+      toggle.addEventListener('click', () => {
+        if (!busy) setMode(mode === 'login' ? 'signup' : 'login');
+      });
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (busy || !form.reportValidity()) return;
+        setBusy(true);
+        message($('#auth-message'));
+        try {
+          const client = await getClient();
+          const credentials = { email: email.value.trim(), password: password.value };
+          const result = mode === 'signup'
+            ? await client.auth.signUp({ ...credentials, options: { emailRedirectTo: window.location.origin + '/' } })
+            : await client.auth.signInWithPassword(credentials);
+          if (result.error) throw result.error;
+          password.value = '';
+          if (result.data.session) {
+            updateAccount(result.data.session);
+            dialog.close();
+            message($('#account-message'), '로그인했어요.');
+          } else if (mode === 'signup') {
+            setMode('login');
+            message($('#auth-message'), '가입 확인이 필요할 수 있어요. 받은 메일함의 확인 링크를 누른 뒤 로그인해주세요.');
+          }
+        } catch (error) {
+          message($('#auth-message'), errorText(error), true);
+        } finally { setBusy(false); }
+      });
+      $('#logout-button').addEventListener('click', async () => {
+        const button = $('#logout-button');
+        button.disabled = true;
+        message($('#account-message'));
+        try {
+          const client = await getClient();
+          const { error } = await client.auth.signOut({ scope: 'local' });
+          if (error) throw error;
+          updateAccount(null);
+          password.value = '';
+          message($('#account-message'), '로그아웃했어요.');
+        } catch (error) { message($('#account-message'), errorText(error), true); }
+        finally { button.disabled = false; }
+      });
+      getClient().catch(error => message($('#account-message'), errorText(error), true));
+    })();
+  </script>
   <script>
     'use strict';
     const storageKey = 'today-todos-v1';
