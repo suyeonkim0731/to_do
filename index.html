@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#355d4b">
+  <title>오늘의 할 일</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f6f5f0; color: #273c31; font-family: "Malgun Gothic", system-ui, sans-serif; }
+    main { width: min(100% - 40px, 640px); margin: 90px auto; }
+    .eyebrow { color: #6b806f; font-size: 12px; font-weight: 700; letter-spacing: .18em; }
+    h1 { margin: 14px 0 12px; font-size: clamp(32px, 7vw, 44px); letter-spacing: -.06em; }
+    .intro { color: #778076; font-size: 15px; line-height: 1.7; margin-bottom: 32px; }
+    .card { padding: 28px; border: 1px solid #e3e6dc; background: #fffefa; border-radius: 24px; box-shadow: 0 16px 50px #273c3108; }
+    form { display: flex; gap: 10px; }
+    input[type="text"] { width: 100%; min-width: 0; border: 1px solid #dce2d7; background: white; border-radius: 12px; padding: 16px; font: inherit; color: inherit; }
+    input::placeholder { color: #929a91; }
+    button { font: inherit; cursor: pointer; }
+    .add { flex-shrink: 0; border: 0; padding: 0 22px; border-radius: 12px; color: white; background: #355d4b; font-weight: 700; }
+    .add:hover { background: #254735; }
+    :focus-visible { outline: 3px solid #9fbda6; outline-offset: 3px; }
+    .summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 25px 0 16px; border-bottom: 1px solid #ecede6; font-size: 13px; }
+    .count { color: #7b857b; }
+    .count strong { color: #355d4b; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { display: flex; gap: 12px; align-items: center; padding: 18px 0; border-bottom: 1px solid #ecede6; }
+    li:last-child { border-bottom: 0; }
+    label { display: flex; gap: 13px; align-items: center; flex: 1; min-width: 0; cursor: pointer; }
+    input[type="checkbox"] { width: 21px; height: 21px; margin: 0; flex-shrink: 0; accent-color: #355d4b; cursor: pointer; }
+    .task-text { line-height: 1.6; overflow-wrap: anywhere; }
+    .done .task-text { text-decoration: line-through; color: #939c91; }
+    .delete { flex-shrink: 0; border: 0; border-radius: 8px; background: transparent; color: #8c9389; padding: 8px 10px; font-size: 12px; }
+    .delete:hover { background: #fbefeb; color: #b45f50; }
+    .empty { text-align: center; padding: 42px 5px 25px; color: #899184; font-size: 14px; line-height: 1.8; }
+    .empty-icon { font-size: 28px; margin-bottom: 12px; color: #6f8c6f; }
+    [hidden] { display: none !important; }
+    footer { text-align: center; color: #93998e; font-size: 12px; margin-top: 23px; line-height: 1.8; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    @media (max-width: 480px) { main { margin: 48px auto; width: calc(100% - 28px); } .card { padding: 20px; } .add { padding: 0 17px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">A LITTLE PROGRESS, EVERY DAY</div>
+    <h1>오늘의 할 일<span style="color:#7d9b70">.</span></h1>
+    <p class="intro">머릿속 할 일을 가볍게 꺼내놓으세요.<br>작은 실천 하나가 알찬 하루를 만듭니다.</p>
+    <section class="card" aria-label="할 일 관리">
+      <form id="task-form">
+        <label for="task-input" class="sr-only">새로운 할 일</label>
+        <input id="task-input" type="text" placeholder="어떤 일을 해볼까요?" maxlength="300" required autocomplete="off">
+        <button type="submit" class="add">추가</button>
+      </form>
+      <div class="summary"><strong>나의 목록</strong><span class="count" id="count" aria-live="polite"></span></div>
+      <ul id="task-list" aria-label="할 일 목록"></ul>
+      <div class="empty" id="empty"><div class="empty-icon" aria-hidden="true">✳</div>아직 등록한 할 일이 없어요.<br>오늘 해보고 싶은 일을 적어보세요.</div>
+      <p id="status" class="sr-only" role="status"></p>
+    </section>
+    <footer id="save-note">이 브라우저에 자동으로 저장돼요.</footer>
+  </main>
+  <script>
+    'use strict';
+    const storageKey = 'today-todos-v1';
+    const form = document.querySelector('#task-form');
+    const input = document.querySelector('#task-input');
+    const list = document.querySelector('#task-list');
+    const status = document.querySelector('#status');
+    let tasks = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (Array.isArray(saved)) tasks = saved.filter(task => task && typeof task.text === 'string' && typeof task.done === 'boolean');
+    } catch { document.querySelector('#save-note').textContent = '저장된 목록을 불러오지 못했어요. 새 목록으로 시작합니다.'; }
+    function save() {
+      try { localStorage.setItem(storageKey, JSON.stringify(tasks)); }
+      catch { document.querySelector('#save-note').textContent = '자동 저장을 사용할 수 없어요. 창을 닫으면 목록이 사라질 수 있어요.'; }
+    }
+    function render() {
+      list.replaceChildren();
+      tasks.forEach((task, index) => {
+        const row = document.createElement('li');
+        row.classList.toggle('done', task.done);
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = task.done;
+        const text = document.createElement('span');
+        text.className = 'task-text';
+        text.textContent = task.text;
+        checkbox.addEventListener('change', () => {
+          task.done = checkbox.checked;
+          row.classList.toggle('done', task.done);
+          save();
+          updateCount();
+          status.textContent = task.done ? '할 일을 완료했어요.' : '할 일을 진행 중으로 변경했어요.';
+        });
+        label.append(checkbox, text);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'delete';
+        button.textContent = '삭제';
+        button.setAttribute('aria-label', task.text + ' 삭제');
+        button.addEventListener('click', () => {
+          tasks.splice(index, 1);
+          save();
+          render();
+          const next = list.children[Math.min(index, tasks.length - 1)];
+          (next ? next.querySelector('.delete') : input).focus();
+          status.textContent = '할 일을 삭제했어요.';
+        });
+        row.append(label, button);
+        list.append(row);
+      });
+      updateCount();
+    }
+    function updateCount() {
+      const done = tasks.filter(task => task.done).length;
+      document.querySelector('#count').textContent = `전체 ${tasks.length} · 완료 ${done}`;
+      document.querySelector('#empty').hidden = tasks.length > 0;
+    }
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) { input.value = ''; input.focus(); return; }
+      tasks.push({ text, done: false });
+      save();
+      render();
+      input.value = '';
+      input.focus();
+      status.textContent = '할 일을 추가했어요.';
+    });
+    render();
+  </script>
+</body>
+</html>
