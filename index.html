@@ -30,6 +30,13 @@
     input[type="checkbox"] { width: 21px; height: 21px; margin: 0; flex-shrink: 0; accent-color: #355d4b; cursor: pointer; }
     .task-text { line-height: 1.6; overflow-wrap: anywhere; }
     .done .task-text { text-decoration: line-through; color: #939c91; }
+    .task-group { margin-top: 24px; }
+    .group-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; }
+    .group-count { color: #7b857b; font-size: 12px; font-weight: 400; }
+    .group-empty { color: #939c91; font-size: 13px; padding: 10px 0; margin: 0; }
+    .task-state { max-width: 90px; border: 1px solid #dce2d7; border-radius: 8px; padding: 8px 5px; font: inherit; font-size: 12px; color: #355d4b; background: #f5f7f0; cursor: pointer; }
+    .task-state[data-state="doing"] { background: #fff5db; color: #7e5a12; }
+    .task-state[data-state="done"] { background: #eaf2e8; }
     .delete { flex-shrink: 0; border: 0; border-radius: 8px; background: transparent; color: #8c9389; padding: 8px 10px; font-size: 12px; }
     .delete:hover { background: #fbefeb; color: #b45f50; }
     .empty { text-align: center; padding: 42px 5px 25px; color: #899184; font-size: 14px; line-height: 1.8; }
@@ -52,7 +59,7 @@
         <button type="submit" class="add">추가</button>
       </form>
       <div class="summary"><strong>나의 목록</strong><span class="count" id="count" aria-live="polite"></span></div>
-      <ul id="task-list" aria-label="할 일 목록"></ul>
+      <div id="task-list" aria-label="상태별 할 일 목록"></div>
       <div class="empty" id="empty"><div class="empty-icon" aria-hidden="true">✳</div>아직 등록한 할 일이 없어요.<br>오늘 해보고 싶은 일을 적어보세요.</div>
       <p id="status" class="sr-only" role="status"></p>
     </section>
@@ -65,10 +72,17 @@
     const input = document.querySelector('#task-input');
     const list = document.querySelector('#task-list');
     const status = document.querySelector('#status');
+    const groups = [
+      { value: 'pending', label: '못함', empty: '아직 시작하지 않은 일이 없어요.' },
+      { value: 'doing', label: '진행중', empty: '진행 중인 일이 없어요.' },
+      { value: 'done', label: '완료', empty: '완료한 일이 여기에 모여요.' }
+    ];
     let tasks = [];
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      if (Array.isArray(saved)) tasks = saved.filter(task => task && typeof task.text === 'string' && typeof task.done === 'boolean');
+      if (Array.isArray(saved)) tasks = saved
+        .filter(task => task && typeof task.text === 'string' && (groups.some(group => group.value === task.state) || typeof task.done === 'boolean'))
+        .map(task => ({ text: task.text, state: groups.some(group => group.value === task.state) ? task.state : (task.done ? 'done' : 'pending') }));
     } catch { document.querySelector('#save-note').textContent = '저장된 목록을 불러오지 못했어요. 새 목록으로 시작합니다.'; }
     function save() {
       try { localStorage.setItem(storageKey, JSON.stringify(tasks)); }
@@ -76,52 +90,93 @@
     }
     function render() {
       list.replaceChildren();
-      tasks.forEach((task, index) => {
+      groups.forEach(group => {
+        const section = document.createElement('section');
+        section.className = 'task-group';
+        section.setAttribute('aria-label', group.label + ' 목록');
+        const heading = document.createElement('h2');
+        heading.className = 'group-title';
+        heading.textContent = group.label;
+        const count = document.createElement('span');
+        count.className = 'group-count';
+        count.textContent = tasks.filter(task => task.state === group.value).length + '개';
+        heading.append(count);
+        const groupList = document.createElement('ul');
+        tasks.filter(task => task.state === group.value).forEach(task => {
         const row = document.createElement('li');
-        row.classList.toggle('done', task.done);
+        row.classList.toggle('done', task.state === 'done');
         const label = document.createElement('label');
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.checked = task.done;
+        checkbox.checked = task.state === 'done';
+        checkbox.setAttribute('aria-label', task.text + ' 완료');
         const text = document.createElement('span');
         text.className = 'task-text';
         text.textContent = task.text;
         checkbox.addEventListener('change', () => {
-          task.done = checkbox.checked;
-          row.classList.toggle('done', task.done);
-          save();
-          updateCount();
-          status.textContent = task.done ? '할 일을 완료했어요.' : '할 일을 진행 중으로 변경했어요.';
+          changeState(task, checkbox.checked ? 'done' : 'pending', 'input');
         });
         label.append(checkbox, text);
+        const select = document.createElement('select');
+        select.className = 'task-state';
+        select.dataset.state = task.state;
+        select.setAttribute('aria-label', task.text + ' 상태');
+        groups.forEach(optionGroup => {
+          const option = document.createElement('option');
+          option.value = optionGroup.value;
+          option.textContent = optionGroup.label;
+          select.append(option);
+        });
+        select.value = task.state;
+        select.addEventListener('change', () => changeState(task, select.value, 'select'));
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'delete';
         button.textContent = '삭제';
         button.setAttribute('aria-label', task.text + ' 삭제');
         button.addEventListener('click', () => {
-          tasks.splice(index, 1);
+          const position = Array.from(list.querySelectorAll('.delete')).indexOf(button);
+          tasks.splice(tasks.indexOf(task), 1);
           save();
           render();
-          const next = list.children[Math.min(index, tasks.length - 1)];
-          (next ? next.querySelector('.delete') : input).focus();
+          const buttons = list.querySelectorAll('.delete');
+          (buttons[Math.min(position, buttons.length - 1)] || input).focus();
           status.textContent = '할 일을 삭제했어요.';
         });
-        row.append(label, button);
-        list.append(row);
+        row.append(label, select, button);
+        row.task = task;
+        groupList.append(row);
+        });
+        section.append(heading, groupList);
+        if (!groupList.children.length) {
+          const empty = document.createElement('p');
+          empty.className = 'group-empty';
+          empty.textContent = group.empty;
+          section.append(empty);
+        }
+        list.append(section);
       });
       updateCount();
     }
+    function changeState(task, state, control) {
+      task.state = state;
+      save();
+      render();
+      const row = Array.from(list.querySelectorAll('li')).find(item => item.task === task);
+      row.querySelector(control).focus();
+      status.textContent = groups.find(group => group.value === state).label + ' 목록으로 이동했어요.';
+    }
     function updateCount() {
-      const done = tasks.filter(task => task.done).length;
+      const done = tasks.filter(task => task.state === 'done').length;
       document.querySelector('#count').textContent = `전체 ${tasks.length} · 완료 ${done}`;
       document.querySelector('#empty').hidden = tasks.length > 0;
+      list.hidden = tasks.length === 0;
     }
     form.addEventListener('submit', event => {
       event.preventDefault();
       const text = input.value.trim();
       if (!text) { input.value = ''; input.focus(); return; }
-      tasks.push({ text, done: false });
+      tasks.push({ text, state: 'pending' });
       save();
       render();
       input.value = '';
